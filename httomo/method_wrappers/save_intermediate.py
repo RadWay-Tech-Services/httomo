@@ -73,7 +73,7 @@ class SaveIntermediateFilesWrapper(GenericMethodWrapper):
 
         mem_start = _get_memory_usage_mb()
         log_once(
-            f"save_intermediate memory usage start={mem_start:.2f} MB "
+            f"save_intermediate memory usage start={mem_start:.2f} MB",
             level=logging.DEBUG,
         )
 
@@ -116,7 +116,7 @@ class SaveIntermediateFilesWrapper(GenericMethodWrapper):
 
         mem_end = _get_memory_usage_mb()
         log_once(
-            f"save_intermediate memory usage end={mem_end:.2f} MB "
+            f"save_intermediate memory usage end={mem_end:.2f} MB",
             level=logging.DEBUG,
         )
 

@@ -140,7 +140,7 @@ class TaskRunner:
 
             mem_start = _get_memory_usage_mb()
             log_once(
-                f"For cycle idx={idx}, block={block} memory usage start={mem_start:.2f} MB "
+                f"For cycle idx={idx}, block={block} memory usage start={mem_start:.2f} MB",
                 level=logging.DEBUG,
             )
 
@@ -165,7 +165,7 @@ class TaskRunner:
 
             mem_end = _get_memory_usage_mb()
             log_once(
-                f"For cycle idx={idx}, block={block} memory usage end={mem_end:.2f} MB "
+                f"For cycle idx={idx}, block={block} memory usage end={mem_end:.2f} MB",
                 level=logging.DEBUG,
             )
 
