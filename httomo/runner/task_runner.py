@@ -39,6 +39,13 @@ from httomo.utils import (
 )
 import numpy as np
 
+import psutil
+import os
+
+def _get_memory_usage_mb():
+    """Get current process memory usage in MB."""
+    process = psutil.Process(os.getpid())
+    return process.memory_info().rss / 1024 / 1024
 
 class TaskRunner:
     """Handles the execution of a pipeline"""
@@ -130,6 +137,13 @@ class TaskRunner:
             ascii=True,
         )
         for idx, block in enumerate(progress):
+
+            mem_start = _get_memory_usage_mb()
+            log_once(
+                f"For cycle idx={idx}, block={block} memory usage start={mem_start:.2f} MB "
+                level=logging.DEBUG,
+            )
+
             end_source = time.perf_counter_ns()
             if self.monitor is not None:
                 self.monitor.report_source_block(
@@ -147,6 +161,12 @@ class TaskRunner:
             log_rank(
                 f"    Finished processing block {idx + 1} of {no_of_blocks}",
                 comm=self.comm,
+            )
+
+            mem_end = _get_memory_usage_mb()
+            log_once(
+                f"For cycle idx={idx}, block={block} memory usage end={mem_end:.2f} MB "
+                level=logging.DEBUG,
             )
 
             start_sink = time.perf_counter_ns()

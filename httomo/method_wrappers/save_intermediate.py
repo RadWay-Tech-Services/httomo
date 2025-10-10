@@ -14,6 +14,13 @@ from httomo.utils import catchtime, xp
 import h5py
 import numpy as np
 
+import psutil
+import os
+
+def _get_memory_usage_mb():
+    """Get current process memory usage in MB."""
+    process = psutil.Process(os.getpid())
+    return process.memory_info().rss / 1024 / 1024
 
 class SaveIntermediateFilesWrapper(GenericMethodWrapper):
     @classmethod
@@ -63,6 +70,13 @@ class SaveIntermediateFilesWrapper(GenericMethodWrapper):
         weakref.finalize(self, self._file.close)
 
     def execute(self, block: T) -> T:
+
+        mem_start = _get_memory_usage_mb()
+        log_once(
+            f"save_intermediate memory usage start={mem_start:.2f} MB "
+            level=logging.DEBUG,
+        )
+
         # we overwrite the whole execute method here, as we do not need any of the helper
         # methods from the Generic Wrapper
         # What we know:
@@ -98,6 +112,12 @@ class SaveIntermediateFilesWrapper(GenericMethodWrapper):
             detector_x=self._loader.detector_x,
             detector_y=self._loader.detector_y,
             angles=block.angles,
+        )
+
+        mem_end = _get_memory_usage_mb()
+        log_once(
+            f"save_intermediate memory usage end={mem_end:.2f} MB "
+            level=logging.DEBUG,
         )
 
         if block.is_last_in_chunk:
