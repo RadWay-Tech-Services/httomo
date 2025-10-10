@@ -9,7 +9,7 @@ from httomo.method_wrappers.generic import GenericMethodWrapper
 from httomo.runner.loader import LoaderInterface
 from httomo.runner.method_wrapper import GpuTimeInfo, MethodWrapper
 from httomo.runner.methods_repository_interface import MethodRepository
-from httomo.utils import catchtime, xp
+from httomo.utils import catchtime, xp, log_once, log_rank
 
 import h5py
 import numpy as np
