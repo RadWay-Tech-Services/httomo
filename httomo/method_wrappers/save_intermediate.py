@@ -127,6 +127,8 @@ class SaveIntermediateFilesWrapper(GenericMethodWrapper):
             angles=block.angles,
         )
 
+        del data
+
         mem_3 = _get_memory_usage_mb()
         log_once(
             f"save_intermediate memory usage mem_3={mem_3:.2f} MB",
