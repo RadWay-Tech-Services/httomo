@@ -11,6 +11,14 @@ from httomo import globals
 from httomo.runner.dataset import DataSetBlock
 from httomo.utils import log_once, xp
 
+import psutil
+import os
+
+def _get_memory_usage_mb():
+    """Get current process memory usage in MB."""
+    process = psutil.Process(os.getpid())
+    return process.memory_info().rss / 1024 / 1024
+
 __all__ = ["calculate_stats", "save_intermediate_data"]
 
 # save a copy of the original guess_chunk if it needs to be restored
@@ -62,8 +70,27 @@ def save_intermediate_data(
 ) -> None:
     """Saves intermediate data to a file, including auxiliary"""
 
+    mem_start = _get_memory_usage_mb()
+    log_once(
+        f"save_intermediate_data memory usage start={mem_start:.2f} MB",
+        level=logging.DEBUG,
+    )
+
     if isinstance(file, h5py.File):
+        
+        mem_1 = _get_memory_usage_mb()
+        log_once(
+            f"save_intermediate_data memory usage mem_1={mem_1:.2f} MB",
+            level=logging.DEBUG,
+        )
         _save_auxiliary_data_hdf5(file, angles, detector_x, detector_y)
+
+        mem_2 = _get_memory_usage_mb()
+        log_once(
+            f"save_intermediate_data memory usage mem_2={mem_2:.2f} MB",
+            level=logging.DEBUG,
+        )
+
         dataset = setup_dataset(
             file,
             path,
@@ -73,6 +100,12 @@ def save_intermediate_data(
             global_shape,
             minimum_block_length,
             filetype="hdf5",
+        )
+
+        mem_3 = _get_memory_usage_mb()
+        log_once(
+            f"save_intermediate_data memory usage mem_3={mem_3:.2f} MB",
+            level=logging.DEBUG,
         )
 
     _save_dataset_data(dataset, data, global_shape, global_index)
@@ -93,6 +126,12 @@ def setup_dataset(
         DIMS = [0, 1, 2]
         non_slicing_dims = list(set(DIMS) - set([slicing_dim]))
 
+        mem_start = _get_memory_usage_mb()
+        log_once(
+            f"setup_dataset memory usage start={mem_start:.2f} MB",
+            level=logging.DEBUG,
+        )
+
         if frames_per_chunk == -1:
             # decide the number of frames in a chunk by maximising the
             # number of frames around the saturation bandwidth of the
@@ -107,6 +146,12 @@ def setup_dataset(
             # MPI ranks
             frames_per_chunk = SATURATION_BW // sz_per_chunk
 
+        mem_1 = _get_memory_usage_mb()
+        log_once(
+            f"setup_dataset memory usage mem_1={mem_1:.2f} MB",
+            level=logging.DEBUG,
+        )
+
         if frames_per_chunk > data.shape[slicing_dim]:
             warn_message = (
                 f"frames_per_chunk={frames_per_chunk} exceeds number of elements in "
@@ -115,6 +160,12 @@ def setup_dataset(
             )
             log_once(warn_message, logging.DEBUG)
             frames_per_chunk = 1
+
+        mem_2 = _get_memory_usage_mb()
+        log_once(
+            f"setup_dataset memory usage mem_2={mem_2:.2f} MB",
+            level=logging.DEBUG,
+        )
 
         if frames_per_chunk > minimum_block_length:
             warn_message = (
@@ -125,6 +176,12 @@ def setup_dataset(
             )
             log_once(warn_message, logging.DEBUG)
             frames_per_chunk = minimum_block_length
+
+        mem_3 = _get_memory_usage_mb()
+        log_once(
+            f"setup_dataset memory usage mem_3={mem_3:.2f} MB",
+            level=logging.DEBUG,
+        )
 
         if frames_per_chunk > 0:
             chunk_shape = [0, 0, 0]
@@ -137,6 +194,13 @@ def setup_dataset(
         # monkey-patch guess_chunk in h5py for compression
         # this is to avoid FILL_TIME_ALLOC
         compression: Union[dict, hdf5plugin.Blosc]
+
+        mem_4 = _get_memory_usage_mb()
+        log_once(
+            f"setup_dataset memory usage mem_4={mem_4:.2f} MB",
+            level=logging.DEBUG,
+        )
+
         if httomo.globals.COMPRESS_INTERMEDIATE:
             compression = hdf5plugin.Blosc()
             h5py._hl.filters.guess_chunk = lambda *args, **kwargs: None
@@ -144,11 +208,23 @@ def setup_dataset(
             compression = {}
             h5py._hl.filters.guess_chunk = ORIGINAL_GUESS_CHUNK
 
+        mem_5 = _get_memory_usage_mb()
+        log_once(
+            f"setup_dataset memory usage mem_5={mem_5:.2f} MB",
+            level=logging.DEBUG,
+        )
+
         # create a dataset creation property list
         if chunk_shape is not None:
             dcpl = _dcpl_fill_never(chunk_shape, global_shape)
         else:
             dcpl = None
+
+        mem_6 = _get_memory_usage_mb()
+        log_once(
+            f"setup_dataset memory usage mem_6={mem_6:.2f} MB",
+            level=logging.DEBUG,
+        )
 
         # adjust the raw data chunk cache options of the dataset
         # according to the chunk size
@@ -168,6 +244,12 @@ def setup_dataset(
                 "rdcc_nslots": None,
             }
 
+        mem_7 = _get_memory_usage_mb()
+        log_once(
+            f"setup_dataset memory usage mem_7={mem_7:.2f} MB",
+            level=logging.DEBUG,
+        )
+
         # only create if not already present - otherwise return existing dataset
         dataset = file.require_dataset(
             path,
@@ -179,6 +261,14 @@ def setup_dataset(
             dcpl=dcpl,
             **rdcc_opts,
         )
+        del dcpl
+
+        mem_8 = _get_memory_usage_mb()
+        log_once(
+            f"setup_dataset memory usage mem_8={mem_8:.2f} MB",
+            level=logging.DEBUG,
+        )
+
     return dataset
 
 
