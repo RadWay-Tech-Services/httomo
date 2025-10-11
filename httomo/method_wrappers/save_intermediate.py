@@ -93,6 +93,12 @@ class SaveIntermediateFilesWrapper(GenericMethodWrapper):
             )
         self._gpu_time_info.device2host += t.elapsed
 
+        mem_1 = _get_memory_usage_mb()
+        log_once(
+            f"save_intermediate memory usage mem_1={mem_1:.2f} MB",
+            level=logging.DEBUG,
+        )
+
         MIN_BLOCK_LEN_PARAM = "minimum_block_length"
         if block.chunk_index[block.slicing_dim] == 0 and self.comm.size > 1:
             minimum_block_length = self.comm.reduce(
@@ -100,6 +106,12 @@ class SaveIntermediateFilesWrapper(GenericMethodWrapper):
             )
             minimum_block_length = self.comm.bcast(minimum_block_length)
             self.append_config_params({MIN_BLOCK_LEN_PARAM: minimum_block_length})
+
+        mem_2 = _get_memory_usage_mb()
+        log_once(
+            f"save_intermediate memory usage mem_2={mem_2:.2f} MB",
+            level=logging.DEBUG,
+        )
 
         self._method(
             data,
@@ -113,6 +125,12 @@ class SaveIntermediateFilesWrapper(GenericMethodWrapper):
             detector_x=self._loader.detector_x,
             detector_y=self._loader.detector_y,
             angles=block.angles,
+        )
+
+        mem_3 = _get_memory_usage_mb()
+        log_once(
+            f"save_intermediate memory usage mem_3={mem_3:.2f} MB",
+            level=logging.DEBUG,
         )
 
         mem_end = _get_memory_usage_mb()
