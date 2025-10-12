@@ -48,6 +48,16 @@ def _get_memory_usage_mb():
     """Get current process memory usage in MB."""
     process = psutil.Process(os.getpid())
     return process.memory_info().rss / 1024 / 1024
+
+
+def safe_hasattr(obj, attr):
+    """Safely check if object has attribute without triggering side effects."""
+    try:
+        return hasattr(obj, attr)
+    except:
+        return False
+
+
 def get_object_size(obj):
     """Get size of an object, handling special cases like numpy/cupy arrays."""
     size = 0
@@ -55,7 +65,7 @@ def get_object_size(obj):
     
     try:
         # Try all possible size attributes
-        if hasattr(obj, 'nbytes'):
+        if safe_hasattr(obj, 'nbytes'):
             try:
                 nb = obj.nbytes
                 # Ensure it's an integer
@@ -64,19 +74,19 @@ def get_object_size(obj):
             except:
                 pass
         
-        if size == 0 and hasattr(obj, 'element_size') and hasattr(obj, 'nelement'):
+        if size == 0 and safe_hasattr(obj, 'element_size') and safe_hasattr(obj, 'nelement'):
             try:
                 size = int(obj.element_size() * obj.nelement())
             except:
                 pass
         
-        if size == 0 and hasattr(obj, '__sizeof__'):
+        if size == 0 and safe_hasattr(obj, '__sizeof__'):
             try:
                 size = int(obj.__sizeof__())
             except:
                 pass
         
-        if size == 0 and hasattr(obj, 'memory_usage'):
+        if size == 0 and safe_hasattr(obj, 'memory_usage'):
             try:
                 mem = obj.memory_usage(deep=True)
                 if hasattr(mem, 'sum'):
@@ -125,7 +135,7 @@ def list_all_variables_all_namespaces():
         size, _ = get_object_size(obj)
         
         # Check if this looks like it SHOULD have size but doesn't
-        has_size_attr = any(hasattr(obj, attr) for attr in ['nbytes', 'element_size', 'memory_usage', 'shape'])
+        has_size_attr = any(safe_hasattr(obj, attr) for attr in ['nbytes', 'element_size', 'memory_usage', 'shape'])
         
         if full_type not in type_info:
             type_info[full_type] = {
@@ -227,10 +237,16 @@ def list_all_variables_all_namespaces():
             obj = obj_info['obj']
             
             details = []
-            if hasattr(obj, 'shape'):
-                details.append(f"shape={obj.shape}")
-            if hasattr(obj, 'dtype'):
-                details.append(f"dtype={obj.dtype}")
+            if safe_hasattr(obj, 'shape'):
+                try:
+                    details.append(f"shape={obj.shape}")
+                except:
+                    pass
+            if safe_hasattr(obj, 'dtype'):
+                try:
+                    details.append(f"dtype={obj.dtype}")
+                except:
+                    pass
             
             details_str = ", ".join(details) if details else ""
             log_once(f"{obj_info['type']:<50} {size_mb:>12,.2f} MB    {details_str:<30}", level=logging.DEBUG)
@@ -253,7 +269,7 @@ def list_all_variables_all_namespaces():
     for name, obj in globals().items():
         if not name.startswith('_') and not inspect.ismodule(obj) and not inspect.isfunction(obj) and not inspect.isclass(obj):
             size, obj_type = get_object_size(obj)
-            if size > 0 or any(hasattr(obj, attr) for attr in ['nbytes', 'shape']):
+            if size > 0 or any(safe_hasattr(obj, attr) for attr in ['nbytes', 'shape']):
                 all_named_vars.append({
                     'name': name,
                     'scope': 'global',
@@ -267,7 +283,7 @@ def list_all_variables_all_namespaces():
     for name, obj in frame.f_locals.items():
         if not name.startswith('_') and name not in ['frame', 'gc_objects', 'type_info', 'large_objects']:
             size, obj_type = get_object_size(obj)
-            if size > 0 or any(hasattr(obj, attr) for attr in ['nbytes', 'shape']):
+            if size > 0 or any(safe_hasattr(obj, attr) for attr in ['nbytes', 'shape']):
                 all_named_vars.append({
                     'name': name,
                     'scope': 'local',
@@ -283,7 +299,7 @@ def list_all_variables_all_namespaces():
         for name, obj in current_frame.f_locals.items():
             if not name.startswith('_'):
                 size, obj_type = get_object_size(obj)
-                if size > 0 or any(hasattr(obj, attr) for attr in ['nbytes', 'shape']):
+                if size > 0 or any(safe_hasattr(obj, attr) for attr in ['nbytes', 'shape']):
                     all_named_vars.append({
                         'name': name,
                         'scope': f'outer_{scope_num}',
