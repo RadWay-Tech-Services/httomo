@@ -48,7 +48,6 @@ def _get_memory_usage_mb():
     """Get current process memory usage in MB."""
     process = psutil.Process(os.getpid())
     return process.memory_info().rss / 1024 / 1024
-
 def get_object_size(obj):
     """Get size of an object, handling special cases like numpy/cupy arrays."""
     size = 0
@@ -57,30 +56,48 @@ def get_object_size(obj):
     try:
         # Try all possible size attributes
         if hasattr(obj, 'nbytes'):
-            size = obj.nbytes
-        elif hasattr(obj, 'element_size') and hasattr(obj, 'nelement'):
-            size = obj.element_size() * obj.nelement()
-        elif hasattr(obj, '__sizeof__'):
-            size = obj.__sizeof__()
-        elif hasattr(obj, 'memory_usage'):
             try:
-                size = obj.memory_usage(deep=True)
-                if hasattr(size, 'sum'):
-                    size = size.sum()
+                nb = obj.nbytes
+                # Ensure it's an integer
+                if isinstance(nb, (int, float)):
+                    size = int(nb)
+            except:
+                pass
+        
+        if size == 0 and hasattr(obj, 'element_size') and hasattr(obj, 'nelement'):
+            try:
+                size = int(obj.element_size() * obj.nelement())
+            except:
+                pass
+        
+        if size == 0 and hasattr(obj, '__sizeof__'):
+            try:
+                size = int(obj.__sizeof__())
+            except:
+                pass
+        
+        if size == 0 and hasattr(obj, 'memory_usage'):
+            try:
+                mem = obj.memory_usage(deep=True)
+                if hasattr(mem, 'sum'):
+                    size = int(mem.sum())
+                elif isinstance(mem, (int, float)):
+                    size = int(mem)
             except:
                 pass
         
         # Fallback to sys.getsizeof
         if size == 0:
             try:
-                size = sys.getsizeof(obj)
+                size = int(sys.getsizeof(obj))
             except:
                 pass
         
     except Exception as e:
         pass
     
-    return size, obj_type
+    # Ensure we always return an integer
+    return int(size) if isinstance(size, (int, float)) else 0, obj_type
 
 
 def list_all_variables_all_namespaces():
