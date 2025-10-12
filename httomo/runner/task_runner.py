@@ -49,110 +49,204 @@ def _get_memory_usage_mb():
     process = psutil.Process(os.getpid())
     return process.memory_info().rss / 1024 / 1024
 
-
-def get_size_recursive(obj, seen=None):
-    """Recursively calculate the size of an object including referenced objects."""
-    if seen is None:
-        seen = set()
-    
-    obj_id = id(obj)
-    if obj_id in seen:
+def get_object_size(obj):
+    """Get size of an object, handling special cases like numpy arrays."""
+    try:
+        # First try sys.getsizeof
+        size = sys.getsizeof(obj)
+        
+        # Check for numpy arrays
+        if hasattr(obj, 'nbytes'):
+            size = max(size, obj.nbytes)
+        
+        # Check for torch tensors
+        if hasattr(obj, 'element_size') and hasattr(obj, 'nelement'):
+            size = max(size, obj.element_size() * obj.nelement())
+        
+        # Check for cupy arrays
+        if hasattr(obj, 'nbytes'):
+            size = max(size, obj.nbytes)
+        
+        return size
+    except Exception as e:
         return 0
-    
-    seen.add(obj_id)
-    size = sys.getsizeof(obj)
-    
-    # Handle different container types
-    if isinstance(obj, dict):
-        size += sum(get_size_recursive(k, seen) + get_size_recursive(v, seen) 
-                   for k, v in obj.items())
-    elif isinstance(obj, (list, tuple, set, frozenset)):
-        size += sum(get_size_recursive(item, seen) for item in obj)
-    
-    return size
 
 
 def list_all_variables_all_namespaces():
     """List ALL variables from ALL accessible namespaces with memory usage."""
     
-    all_vars = {}
-    
     log_once("=" * 100, level=logging.DEBUG)
     log_once("ALL VARIABLES IN ALL NAMESPACES", level=logging.DEBUG)
     log_once("=" * 100, level=logging.DEBUG)
     
-    # 1. GLOBAL NAMESPACE
-    log_once("\n1. GLOBAL NAMESPACE", level=logging.DEBUG)
+    # 1. SCAN ALL OBJECTS IN MEMORY FIRST (this is where the real memory is)
+    log_once("\n1. ALL OBJECTS IN MEMORY (via garbage collector)", level=logging.DEBUG)
+    log_once("-" * 100, level=logging.DEBUG)
+    log_once("Scanning all objects in memory... (this may take a moment)", level=logging.DEBUG)
+    
+    gc_objects = gc.get_objects()
+    
+    # Categorize by type with size
+    type_summary = {}
+    large_objects = []  # Track large objects specifically
+    
+    for obj in gc_objects:
+        obj_type = type(obj).__name__
+        try:
+            size = get_object_size(obj)
+            
+            if size > 0:
+                if obj_type not in type_summary:
+                    type_summary[obj_type] = {'count': 0, 'total_size': 0, 'max_size': 0}
+                type_summary[obj_type]['count'] += 1
+                type_summary[obj_type]['total_size'] += size
+                type_summary[obj_type]['max_size'] = max(type_summary[obj_type]['max_size'], size)
+                
+                # Track objects larger than 1 MB
+                if size > 1024 * 1024:
+                    large_objects.append({
+                        'type': obj_type,
+                        'size': size,
+                        'obj': obj,
+                        'id': id(obj)
+                    })
+        except Exception as e:
+            pass
+    
+    # Sort and display type summary
+    log_once(f"\n{'Type':<25} {'Count':<15} {'Total Size':<20} {'Max Size':<20}", level=logging.DEBUG)
+    log_once("-" * 100, level=logging.DEBUG)
+    
+    sorted_types = sorted(type_summary.items(), 
+                         key=lambda x: x[1]['total_size'], 
+                         reverse=True)[:30]  # Top 30 types
+    
+    for obj_type, info in sorted_types:
+        total_mb = info['total_size'] / (1024 * 1024)
+        max_mb = info['max_size'] / (1024 * 1024)
+        log_once(
+            f"{obj_type:<25} {info['count']:>12,}   "
+            f"{total_mb:>12,.2f} MB    {max_mb:>12,.2f} MB",
+            level=logging.DEBUG
+        )
+    
+    total_size = sum(info['total_size'] for info in type_summary.values())
+    total_gb = total_size / (1024 * 1024 * 1024)
+    
+    log_once("-" * 100, level=logging.DEBUG)
+    log_once(f"Total object types: {len(type_summary)}", level=logging.DEBUG)
+    log_once(f"Total objects in memory: {len(gc_objects):,}", level=logging.DEBUG)
+    log_once(f"Total tracked memory: {total_gb:.2f} GB", level=logging.DEBUG)
+    
+    # 2. SHOW LARGE OBJECTS
+    log_once("\n2. LARGE OBJECTS (>1 MB)", level=logging.DEBUG)
+    log_once("-" * 100, level=logging.DEBUG)
+    
+    if large_objects:
+        large_objects.sort(key=lambda x: x['size'], reverse=True)
+        
+        log_once(f"{'Type':<25} {'Size':<20} {'Shape/Info':<30}", level=logging.DEBUG)
+        log_once("-" * 100, level=logging.DEBUG)
+        
+        for obj_info in large_objects[:50]:  # Show top 50
+            size_mb = obj_info['size'] / (1024 * 1024)
+            obj = obj_info['obj']
+            
+            # Try to get shape or length info
+            shape_info = ""
+            if hasattr(obj, 'shape'):
+                shape_info = f"shape={obj.shape}"
+            elif hasattr(obj, '__len__'):
+                try:
+                    shape_info = f"len={len(obj)}"
+                except:
+                    pass
+            elif hasattr(obj, 'dtype'):
+                shape_info = f"dtype={obj.dtype}"
+            
+            log_once(
+                f"{obj_info['type']:<25} {size_mb:>12,.2f} MB    {shape_info:<30}",
+                level=logging.DEBUG
+            )
+        
+        if len(large_objects) > 50:
+            log_once(f"\n... and {len(large_objects) - 50} more large objects", level=logging.DEBUG)
+        
+        total_large = sum(o['size'] for o in large_objects)
+        log_once("-" * 100, level=logging.DEBUG)
+        log_once(f"Total large objects: {len(large_objects)}", level=logging.DEBUG)
+        log_once(f"Total size of large objects: {total_large / (1024**3):.2f} GB", level=logging.DEBUG)
+    else:
+        log_once("No large objects found (>1 MB)", level=logging.DEBUG)
+    
+    # 3. GLOBAL NAMESPACE
+    log_once("\n3. GLOBAL NAMESPACE", level=logging.DEBUG)
     log_once("-" * 100, level=logging.DEBUG)
     
     global_vars = []
     for name, obj in globals().items():
         if not name.startswith('_') and not inspect.ismodule(obj) and not inspect.isfunction(obj) and not inspect.isclass(obj):
             try:
-                shallow_size = sys.getsizeof(obj)
-                deep_size = get_size_recursive(obj)
-                global_vars.append({
-                    'name': name,
-                    'namespace': 'global',
-                    'type': type(obj).__name__,
-                    'shallow_size': shallow_size,
-                    'deep_size': deep_size,
-                    'obj': obj
-                })
+                size = get_object_size(obj)
+                if size > 0:
+                    global_vars.append({
+                        'name': name,
+                        'namespace': 'global',
+                        'type': type(obj).__name__,
+                        'size': size,
+                        'obj': obj
+                    })
             except Exception as e:
                 pass
     
     if global_vars:
-        log_once(f"{'Variable':<25} {'Type':<15} {'Shallow Size':<15} {'Deep Size':<15}", level=logging.DEBUG)
+        log_once(f"{'Variable':<25} {'Type':<15} {'Size':<20}", level=logging.DEBUG)
         log_once("-" * 100, level=logging.DEBUG)
-        for var in sorted(global_vars, key=lambda x: x['deep_size'], reverse=True):
-            log_once(f"{var['name']:<25} {var['type']:<15} {var['shallow_size']:>12,} B  {var['deep_size']:>12,} B", level=logging.DEBUG)
-        total = sum(v['deep_size'] for v in global_vars)
+        for var in sorted(global_vars, key=lambda x: x['size'], reverse=True):
+            size_mb = var['size'] / (1024 * 1024)
+            log_once(f"{var['name']:<25} {var['type']:<15} {size_mb:>12,.2f} MB", level=logging.DEBUG)
+        total = sum(v['size'] for v in global_vars)
         log_once("-" * 100, level=logging.DEBUG)
-        log_once(f"Total: {len(global_vars)} variables, {total:,} bytes (deep)", level=logging.DEBUG)
+        log_once(f"Total: {len(global_vars)} variables, {total / (1024**3):.2f} GB", level=logging.DEBUG)
     else:
         log_once("No variables found in global namespace", level=logging.DEBUG)
     
-    all_vars['global'] = global_vars
-    
-    # 2. LOCAL NAMESPACE
-    log_once("\n2. LOCAL NAMESPACE", level=logging.DEBUG)
+    # 4. LOCAL NAMESPACE
+    log_once("\n4. LOCAL NAMESPACE", level=logging.DEBUG)
     log_once("-" * 100, level=logging.DEBUG)
     
     frame = inspect.currentframe()
     local_vars = []
     
     for name, obj in frame.f_locals.items():
-        if not name.startswith('_') and name not in ['frame', 'all_vars', 'global_vars']:
+        if not name.startswith('_') and name not in ['frame', 'gc_objects', 'global_vars', 'type_summary', 'large_objects']:
             try:
-                shallow_size = sys.getsizeof(obj)
-                deep_size = get_size_recursive(obj)
-                local_vars.append({
-                    'name': name,
-                    'namespace': 'local',
-                    'type': type(obj).__name__,
-                    'shallow_size': shallow_size,
-                    'deep_size': deep_size,
-                    'obj': obj
-                })
+                size = get_object_size(obj)
+                if size > 0:
+                    local_vars.append({
+                        'name': name,
+                        'namespace': 'local',
+                        'type': type(obj).__name__,
+                        'size': size,
+                        'obj': obj
+                    })
             except Exception as e:
                 pass
     
     if local_vars:
-        log_once(f"{'Variable':<25} {'Type':<15} {'Shallow Size':<15} {'Deep Size':<15}", level=logging.DEBUG)
+        log_once(f"{'Variable':<25} {'Type':<15} {'Size':<20}", level=logging.DEBUG)
         log_once("-" * 100, level=logging.DEBUG)
-        for var in sorted(local_vars, key=lambda x: x['deep_size'], reverse=True):
-            log_once(f"{var['name']:<25} {var['type']:<15} {var['shallow_size']:>12,} B  {var['deep_size']:>12,} B", level=logging.DEBUG)
-        total = sum(v['deep_size'] for v in local_vars)
+        for var in sorted(local_vars, key=lambda x: x['size'], reverse=True):
+            size_mb = var['size'] / (1024 * 1024)
+            log_once(f"{var['name']:<25} {var['type']:<15} {size_mb:>12,.2f} MB", level=logging.DEBUG)
+        total = sum(v['size'] for v in local_vars)
         log_once("-" * 100, level=logging.DEBUG)
-        log_once(f"Total: {len(local_vars)} variables, {total:,} bytes (deep)", level=logging.DEBUG)
+        log_once(f"Total: {len(local_vars)} variables, {total / (1024**3):.2f} GB", level=logging.DEBUG)
     else:
         log_once("No variables found in local namespace", level=logging.DEBUG)
     
-    all_vars['local'] = local_vars
-    
-    # 3. SCAN OUTER SCOPES
-    log_once("\n3. OUTER SCOPES (if any)", level=logging.DEBUG)
+    # 5. OUTER SCOPES
+    log_once("\n5. OUTER SCOPES (if any)", level=logging.DEBUG)
     log_once("-" * 100, level=logging.DEBUG)
     
     outer_vars = []
@@ -166,101 +260,31 @@ def list_all_variables_all_namespaces():
                 not inspect.isfunction(obj) and 
                 not inspect.isclass(obj)):
                 try:
-                    shallow_size = sys.getsizeof(obj)
-                    deep_size = get_size_recursive(obj)
-                    outer_vars.append({
-                        'name': name,
-                        'namespace': f'outer_scope_{scope_level}',
-                        'type': type(obj).__name__,
-                        'shallow_size': shallow_size,
-                        'deep_size': deep_size,
-                        'obj': obj
-                    })
+                    size = get_object_size(obj)
+                    if size > 0:
+                        outer_vars.append({
+                            'name': name,
+                            'namespace': f'outer_scope_{scope_level}',
+                            'type': type(obj).__name__,
+                            'size': size,
+                            'obj': obj
+                        })
                 except Exception as e:
                     pass
         current_frame = current_frame.f_back
         scope_level += 1
     
     if outer_vars:
-        log_once(f"{'Variable':<25} {'Scope':<20} {'Type':<15} {'Deep Size':<15}", level=logging.DEBUG)
+        log_once(f"{'Variable':<25} {'Scope':<20} {'Type':<15} {'Size':<20}", level=logging.DEBUG)
         log_once("-" * 100, level=logging.DEBUG)
-        for var in sorted(outer_vars, key=lambda x: x['deep_size'], reverse=True):
-            log_once(f"{var['name']:<25} {var['namespace']:<20} {var['type']:<15} {var['deep_size']:>12,} B", level=logging.DEBUG)
-        total = sum(v['deep_size'] for v in outer_vars)
+        for var in sorted(outer_vars, key=lambda x: x['size'], reverse=True)[:50]:  # Top 50
+            size_mb = var['size'] / (1024 * 1024)
+            log_once(f"{var['name']:<25} {var['namespace']:<20} {var['type']:<15} {size_mb:>12,.2f} MB", level=logging.DEBUG)
+        total = sum(v['size'] for v in outer_vars)
         log_once("-" * 100, level=logging.DEBUG)
-        log_once(f"Total: {len(outer_vars)} variables, {total:,} bytes (deep)", level=logging.DEBUG)
+        log_once(f"Total: {len(outer_vars)} variables, {total / (1024**3):.2f} GB", level=logging.DEBUG)
     else:
         log_once("No outer scopes found", level=logging.DEBUG)
-    
-    all_vars['outer'] = outer_vars
-    
-    # 4. ALL OBJECTS IN MEMORY (using garbage collector)
-    log_once("\n4. ALL OBJECTS IN MEMORY (via garbage collector)", level=logging.DEBUG)
-    log_once("-" * 100, level=logging.DEBUG)
-    log_once("Scanning all objects in memory... (this may take a moment)", level=logging.DEBUG)
-    
-    type_summary = {}
-    gc_objects = gc.get_objects()
-    
-    for obj in gc_objects:
-        obj_type = type(obj).__name__
-        try:
-            size = sys.getsizeof(obj)
-            if obj_type not in type_summary:
-                type_summary[obj_type] = {'count': 0, 'total_size': 0}
-            type_summary[obj_type]['count'] += 1
-            type_summary[obj_type]['total_size'] += size
-        except:
-            pass
-    
-    log_once(f"\n{'Type':<25} {'Count':<15} {'Total Size':<20}", level=logging.DEBUG)
-    log_once("-" * 100, level=logging.DEBUG)
-    
-    sorted_types = sorted(type_summary.items(), 
-                         key=lambda x: x[1]['total_size'], 
-                         reverse=True)[:20]  # Top 20 types
-    
-    for obj_type, info in sorted_types:
-        log_once(f"{obj_type:<25} {info['count']:>12,}   {info['total_size']:>15,} B", level=logging.DEBUG)
-    
-    log_once("-" * 100, level=logging.DEBUG)
-    log_once(f"Total object types: {len(type_summary)}", level=logging.DEBUG)
-    log_once(f"Total objects in memory: {len(gc_objects):,}", level=logging.DEBUG)
-    
-    # SUMMARY
-    log_once("\n" + "=" * 100, level=logging.DEBUG)
-    log_once("SUMMARY - ALL NAMESPACES COMBINED", level=logging.DEBUG)
-    log_once("=" * 100, level=logging.DEBUG)
-    
-    combined = []
-    for namespace, vars_list in all_vars.items():
-        combined.extend(vars_list)
-    
-    # Remove duplicates (same object in multiple namespaces)
-    unique_vars = {}
-    for var in combined:
-        obj_id = id(var['obj'])
-        if obj_id not in unique_vars:
-            unique_vars[obj_id] = var
-    
-    unique_list = list(unique_vars.values())
-    unique_list.sort(key=lambda x: x['deep_size'], reverse=True)
-    
-    if unique_list:
-        log_once(f"\n{'Variable':<25} {'Namespace':<15} {'Type':<15} {'Deep Size':<15}", level=logging.DEBUG)
-        log_once("-" * 100, level=logging.DEBUG)
-        for var in unique_list:
-            log_once(f"{var['name']:<25} {var['namespace']:<15} {var['type']:<15} {var['deep_size']:>12,} B", level=logging.DEBUG)
-        
-        grand_total = sum(v['deep_size'] for v in unique_list)
-        log_once("-" * 100, level=logging.DEBUG)
-        log_once(f"Total unique variables: {len(unique_list)}", level=logging.DEBUG)
-        log_once(f"Total memory (deep): {grand_total:,} bytes ({grand_total/1024/1024:.2f} MB)", level=logging.DEBUG)
-    else:
-        log_once("\nNo user-defined variables found in any namespace.", level=logging.DEBUG)
-        log_once("\nTip: Create some variables first:", level=logging.DEBUG)
-        log_once("  my_list = [1, 2, 3]", level=logging.DEBUG)
-        log_once("  my_data = {'key': 'value'}", level=logging.DEBUG)
     
     log_once("=" * 100, level=logging.DEBUG)
 
