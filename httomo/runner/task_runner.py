@@ -182,7 +182,7 @@ class TaskRunner:
         start_source = time.perf_counter_ns()
         no_of_blocks = len(splitter)
 
-         list_variables_by_size()
+        list_variables_by_size()
 
         # Redirect tqdm progress bar output to /dev/null, and instead manually write block
         # processing progress to logfile within loop
