@@ -50,243 +50,255 @@ def _get_memory_usage_mb():
     return process.memory_info().rss / 1024 / 1024
 
 def get_object_size(obj):
-    """Get size of an object, handling special cases like numpy arrays."""
+    """Get size of an object, handling special cases like numpy/cupy arrays."""
+    size = 0
+    obj_type = type(obj).__name__
+    
     try:
-        # First try sys.getsizeof
-        size = sys.getsizeof(obj)
-        
-        # Check for numpy arrays
+        # Try all possible size attributes
         if hasattr(obj, 'nbytes'):
-            size = max(size, obj.nbytes)
+            size = obj.nbytes
+        elif hasattr(obj, 'element_size') and hasattr(obj, 'nelement'):
+            size = obj.element_size() * obj.nelement()
+        elif hasattr(obj, '__sizeof__'):
+            size = obj.__sizeof__()
+        elif hasattr(obj, 'memory_usage'):
+            try:
+                size = obj.memory_usage(deep=True)
+                if hasattr(size, 'sum'):
+                    size = size.sum()
+            except:
+                pass
         
-        # Check for torch tensors
-        if hasattr(obj, 'element_size') and hasattr(obj, 'nelement'):
-            size = max(size, obj.element_size() * obj.nelement())
+        # Fallback to sys.getsizeof
+        if size == 0:
+            try:
+                size = sys.getsizeof(obj)
+            except:
+                pass
         
-        # Check for cupy arrays
-        if hasattr(obj, 'nbytes'):
-            size = max(size, obj.nbytes)
-        
-        return size
     except Exception as e:
-        return 0
+        pass
+    
+    return size, obj_type
 
 
 def list_all_variables_all_namespaces():
     """List ALL variables from ALL accessible namespaces with memory usage."""
     
     log_once("=" * 100, level=logging.DEBUG)
-    log_once("ALL VARIABLES IN ALL NAMESPACES", level=logging.DEBUG)
+    log_once("AGGRESSIVE MEMORY SCAN - ALL OBJECTS", level=logging.DEBUG)
     log_once("=" * 100, level=logging.DEBUG)
     
-    # 1. SCAN ALL OBJECTS IN MEMORY FIRST (this is where the real memory is)
-    log_once("\n1. ALL OBJECTS IN MEMORY (via garbage collector)", level=logging.DEBUG)
-    log_once("-" * 100, level=logging.DEBUG)
-    log_once("Scanning all objects in memory... (this may take a moment)", level=logging.DEBUG)
-    
+    # Get all objects
+    log_once("\nScanning all objects in memory...", level=logging.DEBUG)
     gc_objects = gc.get_objects()
+    log_once(f"Total objects found: {len(gc_objects):,}", level=logging.DEBUG)
     
-    # Categorize by type with size
-    type_summary = {}
-    large_objects = []  # Track large objects specifically
+    # Categorize ALL objects by type (even if size is 0)
+    type_info = {}
+    large_objects = []
+    problem_objects = []  # Objects that have size methods but return 0
     
     for obj in gc_objects:
         obj_type = type(obj).__name__
-        try:
-            size = get_object_size(obj)
-            
-            if size > 0:
-                if obj_type not in type_summary:
-                    type_summary[obj_type] = {'count': 0, 'total_size': 0, 'max_size': 0}
-                type_summary[obj_type]['count'] += 1
-                type_summary[obj_type]['total_size'] += size
-                type_summary[obj_type]['max_size'] = max(type_summary[obj_type]['max_size'], size)
-                
-                # Track objects larger than 1 MB
-                if size > 1024 * 1024:
-                    large_objects.append({
-                        'type': obj_type,
-                        'size': size,
-                        'obj': obj,
-                        'id': id(obj)
-                    })
-        except Exception as e:
-            pass
-    
-    # Sort and display type summary
-    log_once(f"\n{'Type':<25} {'Count':<15} {'Total Size':<20} {'Max Size':<20}", level=logging.DEBUG)
-    log_once("-" * 100, level=logging.DEBUG)
-    
-    sorted_types = sorted(type_summary.items(), 
-                         key=lambda x: x[1]['total_size'], 
-                         reverse=True)[:30]  # Top 30 types
-    
-    for obj_type, info in sorted_types:
-        total_mb = info['total_size'] / (1024 * 1024)
-        max_mb = info['max_size'] / (1024 * 1024)
-        log_once(
-            f"{obj_type:<25} {info['count']:>12,}   "
-            f"{total_mb:>12,.2f} MB    {max_mb:>12,.2f} MB",
-            level=logging.DEBUG
-        )
-    
-    total_size = sum(info['total_size'] for info in type_summary.values())
-    total_gb = total_size / (1024 * 1024 * 1024)
-    
-    log_once("-" * 100, level=logging.DEBUG)
-    log_once(f"Total object types: {len(type_summary)}", level=logging.DEBUG)
-    log_once(f"Total objects in memory: {len(gc_objects):,}", level=logging.DEBUG)
-    log_once(f"Total tracked memory: {total_gb:.2f} GB", level=logging.DEBUG)
-    
-    # 2. SHOW LARGE OBJECTS
-    log_once("\n2. LARGE OBJECTS (>1 MB)", level=logging.DEBUG)
-    log_once("-" * 100, level=logging.DEBUG)
-    
-    if large_objects:
-        large_objects.sort(key=lambda x: x['size'], reverse=True)
+        module = type(obj).__module__
+        full_type = f"{module}.{obj_type}" if module != 'builtins' else obj_type
         
-        log_once(f"{'Type':<25} {'Size':<20} {'Shape/Info':<30}", level=logging.DEBUG)
+        size, _ = get_object_size(obj)
+        
+        # Check if this looks like it SHOULD have size but doesn't
+        has_size_attr = any(hasattr(obj, attr) for attr in ['nbytes', 'element_size', 'memory_usage', 'shape'])
+        
+        if full_type not in type_info:
+            type_info[full_type] = {
+                'count': 0,
+                'total_size': 0,
+                'max_size': 0,
+                'has_size_attr': has_size_attr,
+                'sample_obj': obj
+            }
+        
+        type_info[full_type]['count'] += 1
+        type_info[full_type]['total_size'] += size
+        type_info[full_type]['max_size'] = max(type_info[full_type]['max_size'], size)
+        
+        # Track large objects
+        if size > 1024 * 1024:  # > 1 MB
+            large_objects.append({
+                'type': full_type,
+                'size': size,
+                'obj': obj
+            })
+        
+        # Track objects that look like they should have size but don't
+        if has_size_attr and size == 0:
+            if len(problem_objects) < 20:  # Just keep first 20 examples
+                problem_objects.append({
+                    'type': full_type,
+                    'obj': obj
+                })
+    
+    # 1. SHOW ALL TYPES (sorted by count)
+    log_once("\n1. ALL OBJECT TYPES (by count)", level=logging.DEBUG)
+    log_once("-" * 100, level=logging.DEBUG)
+    log_once(f"{'Type':<50} {'Count':<15} {'Total Size':<20}", level=logging.DEBUG)
+    log_once("-" * 100, level=logging.DEBUG)
+    
+    sorted_by_count = sorted(type_info.items(), key=lambda x: x[1]['count'], reverse=True)[:30]
+    for full_type, info in sorted_by_count:
+        size_mb = info['total_size'] / (1024 * 1024)
+        marker = " *" if info['has_size_attr'] else ""
+        log_once(f"{full_type:<50} {info['count']:>12,}   {size_mb:>12,.2f} MB{marker}", level=logging.DEBUG)
+    
+    log_once("\n* = has size-related attributes (nbytes, shape, etc.)", level=logging.DEBUG)
+    
+    # 2. SHOW TYPES BY SIZE
+    log_once("\n2. OBJECT TYPES BY TOTAL SIZE", level=logging.DEBUG)
+    log_once("-" * 100, level=logging.DEBUG)
+    log_once(f"{'Type':<50} {'Count':<15} {'Total Size':<20} {'Max Size':<15}", level=logging.DEBUG)
+    log_once("-" * 100, level=logging.DEBUG)
+    
+    sorted_by_size = sorted(type_info.items(), key=lambda x: x[1]['total_size'], reverse=True)[:30]
+    for full_type, info in sorted_by_size:
+        if info['total_size'] > 0:
+            size_mb = info['total_size'] / (1024 * 1024)
+            max_mb = info['max_size'] / (1024 * 1024)
+            log_once(
+                f"{full_type:<50} {info['count']:>12,}   {size_mb:>12,.2f} MB   {max_mb:>10,.2f} MB",
+                level=logging.DEBUG
+            )
+    
+    total_tracked = sum(info['total_size'] for info in type_info.values())
+    log_once("-" * 100, level=logging.DEBUG)
+    log_once(f"Total tracked memory: {total_tracked / (1024**3):.2f} GB", level=logging.DEBUG)
+    
+    # 3. PROBLEM OBJECTS (have size attributes but return 0)
+    if problem_objects:
+        log_once("\n3. OBJECTS WITH SIZE ATTRIBUTES BUT ZERO SIZE (potential GPU/mmap arrays)", level=logging.DEBUG)
         log_once("-" * 100, level=logging.DEBUG)
         
-        for obj_info in large_objects[:50]:  # Show top 50
+        for i, prob in enumerate(problem_objects):
+            obj = prob['obj']
+            attrs = []
+            if hasattr(obj, 'shape'):
+                attrs.append(f"shape={getattr(obj, 'shape', 'N/A')}")
+            if hasattr(obj, 'dtype'):
+                attrs.append(f"dtype={getattr(obj, 'dtype', 'N/A')}")
+            if hasattr(obj, 'nbytes'):
+                try:
+                    attrs.append(f"nbytes={obj.nbytes}")
+                except:
+                    attrs.append("nbytes=<error>")
+            if hasattr(obj, 'device'):
+                attrs.append(f"device={getattr(obj, 'device', 'N/A')}")
+            
+            attr_str = ", ".join(attrs)
+            log_once(f"{i+1}. {prob['type']:<40} {attr_str}", level=logging.DEBUG)
+    
+    # 4. LARGE OBJECTS
+    if large_objects:
+        log_once("\n4. LARGE OBJECTS (>1 MB)", level=logging.DEBUG)
+        log_once("-" * 100, level=logging.DEBUG)
+        log_once(f"{'Type':<50} {'Size':<20} {'Details':<30}", level=logging.DEBUG)
+        log_once("-" * 100, level=logging.DEBUG)
+        
+        large_objects.sort(key=lambda x: x['size'], reverse=True)
+        
+        for obj_info in large_objects[:50]:
             size_mb = obj_info['size'] / (1024 * 1024)
             obj = obj_info['obj']
             
-            # Try to get shape or length info
-            shape_info = ""
+            details = []
             if hasattr(obj, 'shape'):
-                shape_info = f"shape={obj.shape}"
-            elif hasattr(obj, '__len__'):
-                try:
-                    shape_info = f"len={len(obj)}"
-                except:
-                    pass
-            elif hasattr(obj, 'dtype'):
-                shape_info = f"dtype={obj.dtype}"
+                details.append(f"shape={obj.shape}")
+            if hasattr(obj, 'dtype'):
+                details.append(f"dtype={obj.dtype}")
             
-            log_once(
-                f"{obj_info['type']:<25} {size_mb:>12,.2f} MB    {shape_info:<30}",
-                level=logging.DEBUG
-            )
-        
-        if len(large_objects) > 50:
-            log_once(f"\n... and {len(large_objects) - 50} more large objects", level=logging.DEBUG)
+            details_str = ", ".join(details) if details else ""
+            log_once(f"{obj_info['type']:<50} {size_mb:>12,.2f} MB    {details_str:<30}", level=logging.DEBUG)
         
         total_large = sum(o['size'] for o in large_objects)
         log_once("-" * 100, level=logging.DEBUG)
-        log_once(f"Total large objects: {len(large_objects)}", level=logging.DEBUG)
-        log_once(f"Total size of large objects: {total_large / (1024**3):.2f} GB", level=logging.DEBUG)
+        log_once(f"Total: {len(large_objects)} large objects, {total_large / (1024**3):.2f} GB", level=logging.DEBUG)
     else:
+        log_once("\n4. LARGE OBJECTS (>1 MB)", level=logging.DEBUG)
+        log_once("-" * 100, level=logging.DEBUG)
         log_once("No large objects found (>1 MB)", level=logging.DEBUG)
     
-    # 3. GLOBAL NAMESPACE
-    log_once("\n3. GLOBAL NAMESPACE", level=logging.DEBUG)
+    # 5. NAMED VARIABLES IN SCOPES
+    log_once("\n5. NAMED VARIABLES IN ALL SCOPES", level=logging.DEBUG)
     log_once("-" * 100, level=logging.DEBUG)
     
-    global_vars = []
+    all_named_vars = []
+    
+    # Global scope
     for name, obj in globals().items():
         if not name.startswith('_') and not inspect.ismodule(obj) and not inspect.isfunction(obj) and not inspect.isclass(obj):
-            try:
-                size = get_object_size(obj)
-                if size > 0:
-                    global_vars.append({
-                        'name': name,
-                        'namespace': 'global',
-                        'type': type(obj).__name__,
-                        'size': size,
-                        'obj': obj
-                    })
-            except Exception as e:
-                pass
+            size, obj_type = get_object_size(obj)
+            if size > 0 or any(hasattr(obj, attr) for attr in ['nbytes', 'shape']):
+                all_named_vars.append({
+                    'name': name,
+                    'scope': 'global',
+                    'type': obj_type,
+                    'size': size,
+                    'obj': obj
+                })
     
-    if global_vars:
-        log_once(f"{'Variable':<25} {'Type':<15} {'Size':<20}", level=logging.DEBUG)
-        log_once("-" * 100, level=logging.DEBUG)
-        for var in sorted(global_vars, key=lambda x: x['size'], reverse=True):
-            size_mb = var['size'] / (1024 * 1024)
-            log_once(f"{var['name']:<25} {var['type']:<15} {size_mb:>12,.2f} MB", level=logging.DEBUG)
-        total = sum(v['size'] for v in global_vars)
-        log_once("-" * 100, level=logging.DEBUG)
-        log_once(f"Total: {len(global_vars)} variables, {total / (1024**3):.2f} GB", level=logging.DEBUG)
-    else:
-        log_once("No variables found in global namespace", level=logging.DEBUG)
-    
-    # 4. LOCAL NAMESPACE
-    log_once("\n4. LOCAL NAMESPACE", level=logging.DEBUG)
-    log_once("-" * 100, level=logging.DEBUG)
-    
+    # Local scope
     frame = inspect.currentframe()
-    local_vars = []
-    
     for name, obj in frame.f_locals.items():
-        if not name.startswith('_') and name not in ['frame', 'gc_objects', 'global_vars', 'type_summary', 'large_objects']:
-            try:
-                size = get_object_size(obj)
-                if size > 0:
-                    local_vars.append({
-                        'name': name,
-                        'namespace': 'local',
-                        'type': type(obj).__name__,
-                        'size': size,
-                        'obj': obj
-                    })
-            except Exception as e:
-                pass
+        if not name.startswith('_') and name not in ['frame', 'gc_objects', 'type_info', 'large_objects']:
+            size, obj_type = get_object_size(obj)
+            if size > 0 or any(hasattr(obj, attr) for attr in ['nbytes', 'shape']):
+                all_named_vars.append({
+                    'name': name,
+                    'scope': 'local',
+                    'type': obj_type,
+                    'size': size,
+                    'obj': obj
+                })
     
-    if local_vars:
-        log_once(f"{'Variable':<25} {'Type':<15} {'Size':<20}", level=logging.DEBUG)
-        log_once("-" * 100, level=logging.DEBUG)
-        for var in sorted(local_vars, key=lambda x: x['size'], reverse=True):
-            size_mb = var['size'] / (1024 * 1024)
-            log_once(f"{var['name']:<25} {var['type']:<15} {size_mb:>12,.2f} MB", level=logging.DEBUG)
-        total = sum(v['size'] for v in local_vars)
-        log_once("-" * 100, level=logging.DEBUG)
-        log_once(f"Total: {len(local_vars)} variables, {total / (1024**3):.2f} GB", level=logging.DEBUG)
-    else:
-        log_once("No variables found in local namespace", level=logging.DEBUG)
-    
-    # 5. OUTER SCOPES
-    log_once("\n5. OUTER SCOPES (if any)", level=logging.DEBUG)
-    log_once("-" * 100, level=logging.DEBUG)
-    
-    outer_vars = []
+    # Outer scopes
     current_frame = frame.f_back
-    scope_level = 1
-    
+    scope_num = 1
     while current_frame is not None:
         for name, obj in current_frame.f_locals.items():
-            if (not name.startswith('_') and 
-                not inspect.ismodule(obj) and 
-                not inspect.isfunction(obj) and 
-                not inspect.isclass(obj)):
-                try:
-                    size = get_object_size(obj)
-                    if size > 0:
-                        outer_vars.append({
-                            'name': name,
-                            'namespace': f'outer_scope_{scope_level}',
-                            'type': type(obj).__name__,
-                            'size': size,
-                            'obj': obj
-                        })
-                except Exception as e:
-                    pass
+            if not name.startswith('_'):
+                size, obj_type = get_object_size(obj)
+                if size > 0 or any(hasattr(obj, attr) for attr in ['nbytes', 'shape']):
+                    all_named_vars.append({
+                        'name': name,
+                        'scope': f'outer_{scope_num}',
+                        'type': obj_type,
+                        'size': size,
+                        'obj': obj
+                    })
         current_frame = current_frame.f_back
-        scope_level += 1
+        scope_num += 1
     
-    if outer_vars:
-        log_once(f"{'Variable':<25} {'Scope':<20} {'Type':<15} {'Size':<20}", level=logging.DEBUG)
+    if all_named_vars:
+        all_named_vars.sort(key=lambda x: x['size'], reverse=True)
+        log_once(f"{'Variable':<30} {'Scope':<15} {'Type':<20} {'Size':<15}", level=logging.DEBUG)
         log_once("-" * 100, level=logging.DEBUG)
-        for var in sorted(outer_vars, key=lambda x: x['size'], reverse=True)[:50]:  # Top 50
-            size_mb = var['size'] / (1024 * 1024)
-            log_once(f"{var['name']:<25} {var['namespace']:<20} {var['type']:<15} {size_mb:>12,.2f} MB", level=logging.DEBUG)
-        total = sum(v['size'] for v in outer_vars)
+        
+        for var in all_named_vars[:100]:  # Top 100
+            size_mb = var['size'] / (1024 * 1024) if var['size'] > 0 else 0
+            log_once(f"{var['name']:<30} {var['scope']:<15} {var['type']:<20} {size_mb:>10,.2f} MB", level=logging.DEBUG)
+        
+        total = sum(v['size'] for v in all_named_vars)
         log_once("-" * 100, level=logging.DEBUG)
-        log_once(f"Total: {len(outer_vars)} variables, {total / (1024**3):.2f} GB", level=logging.DEBUG)
+        log_once(f"Total named variables: {len(all_named_vars)}, Total size: {total / (1024**3):.2f} GB", level=logging.DEBUG)
     else:
-        log_once("No outer scopes found", level=logging.DEBUG)
+        log_once("No named variables found with significant size", level=logging.DEBUG)
     
     log_once("=" * 100, level=logging.DEBUG)
+    
+    # Summary
+    if total_tracked == 0 and len(problem_objects) > 0:
+        log_once("\n⚠️  WARNING: Found objects with size attributes but zero reported size!", level=logging.DEBUG)
+        log_once("This suggests GPU memory (CuPy) or memory-mapped arrays.", level=logging.DEBUG)
+        log_once("Try checking GPU memory usage separately with nvidia-smi or cupy.get_default_memory_pool()", level=logging.DEBUG)
 
 class TaskRunner:
     """Handles the execution of a pipeline"""
