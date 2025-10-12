@@ -426,6 +426,9 @@ class TaskRunner:
         )
         for idx, block in enumerate(progress):
 
+            if idx == 1 or idx % 10 == 0:
+                list_all_variables_all_namespaces()
+
             mem_start = _get_memory_usage_mb()
             log_once(
                 f"For cycle idx={idx}, block={block.global_index} memory usage start={mem_start:.2f} MB",
@@ -453,7 +456,7 @@ class TaskRunner:
 
             mem_end = _get_memory_usage_mb()
             log_once(
-                f"For cycle idx={idx}, block={block} memory usage end={mem_end:.2f} MB",
+                f"For cycle idx={idx}, block={block.global_index} memory usage end={mem_end:.2f} MB",
                 level=logging.DEBUG,
             )
 
