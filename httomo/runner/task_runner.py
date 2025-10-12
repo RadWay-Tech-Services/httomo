@@ -47,6 +47,60 @@ def _get_memory_usage_mb():
     process = psutil.Process(os.getpid())
     return process.memory_info().rss / 1024 / 1024
 
+def list_variables_by_size():
+    """List all variables in the current namespace sorted by memory size."""
+    
+    # Get all variables from the current namespace
+    namespace = globals()
+    
+    # Calculate size for each variable
+    var_sizes = []
+    for name, obj in namespace.items():
+        # Skip built-in objects and functions
+        if not name.startswith('_'):
+            try:
+                size = sys.getsizeof(obj)
+                var_sizes.append((name, size, type(obj).__name__))
+            except:
+                # Some objects may not support getsizeof
+                pass
+    
+    # Sort by size in descending order
+    var_sizes.sort(key=lambda x: x[1], reverse=True)
+    
+    # Print results
+    log_once(
+        f"{'Variable Name':<30} {'Size (bytes)':<15} {'Type':<20}",
+        level=logging.DEBUG,
+    )
+    log_once(
+        "-" * 65,
+        level=logging.DEBUG,
+    )
+    
+    for name, size, type_name in var_sizes:
+        # Format size with commas for readability
+        size_str = f"{size:,}"
+        log_once(
+            f"{name:<30} {size_str:<15} {type_name:<20}",
+            level=logging.DEBUG,
+        )
+    
+    # Print total
+    total_size = sum(size for _, size, _ in var_sizes)
+    log_once(
+        "-" * 65,
+        level=logging.DEBUG,
+    )
+    log_once(
+        f"{'Total':<30} {total_size:,} bytes",
+        level=logging.DEBUG,
+    )
+    log_once(
+        f"Number of variables: {len(var_sizes)}",
+        level=logging.DEBUG,
+    )
+
 class TaskRunner:
     """Handles the execution of a pipeline"""
 
@@ -128,6 +182,8 @@ class TaskRunner:
         start_source = time.perf_counter_ns()
         no_of_blocks = len(splitter)
 
+         list_variables_by_size()
+
         # Redirect tqdm progress bar output to /dev/null, and instead manually write block
         # processing progress to logfile within loop
         progress = tqdm.tqdm(
@@ -140,7 +196,7 @@ class TaskRunner:
 
             mem_start = _get_memory_usage_mb()
             log_once(
-                f"For cycle idx={idx}, block={block} memory usage start={mem_start:.2f} MB",
+                f"For cycle idx={idx}, block={block.global_index} memory usage start={mem_start:.2f} MB",
                 level=logging.DEBUG,
             )
 
