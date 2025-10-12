@@ -40,6 +40,8 @@ from httomo.utils import (
 import numpy as np
 
 import psutil
+import inspect
+import gc
 import os
 
 def _get_memory_usage_mb():
