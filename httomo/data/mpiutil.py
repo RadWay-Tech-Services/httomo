@@ -163,7 +163,8 @@ def alltoall_ring(arrays: List[np.ndarray], comm: MPI.Comm, concat_axis: int = 0
             )
 
             # Chunk if array is too large
-            max_elements = _mpi_max_elements
+            # Use max_elements - 1 to ensure we never hit exactly 2^31
+            max_elements = _mpi_max_elements - 1
 
             # Use the LARGER of send/recv size to determine chunking
             # This ensures both sides agree on the number of chunks
