@@ -13,6 +13,7 @@ from httomo.utils import (
     gpu_enabled,
     xp,
     clp2,
+    log_rank,
 )
 
 
@@ -197,6 +198,10 @@ def determine_store_backing(
     if memory_limit_bytes > 0 and section_memory >= memory_limit_bytes:
         send_buffer[0] = True
 
+    log_rank(
+        f"determine_store_backing estimated {section_memory} for section {section_idx}. Limit: {memory_limit_bytes}",
+        comm,
+    )
     # do a logical OR of all the enum variants across the processes
     comm.Allreduce([send_buffer, MPI.BOOL], [recv_buffer, MPI.BOOL], MPI.LOR)
 
